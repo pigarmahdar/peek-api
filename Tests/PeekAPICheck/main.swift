@@ -1,4 +1,5 @@
 import Foundation
+import ServiceManagement
 import PeekAPICore
 
 func testCreditsDecoding() throws {
@@ -168,13 +169,13 @@ func testRealtimeAnalyticsProcessingAndMerging() throws {
             "data": [
                 {
                     "model": "muse/spark-1.3-contributor",
-                    "provider": "Muse",
-                    "total_usage": 0.195
+                    "total_usage": 0.195,
+                    "byok_usage": 0.195
                 },
                 {
                     "model": "mimo/v2.5",
-                    "provider": "OpenRouter",
-                    "total_usage": 0.00709
+                    "total_usage": 0.00709,
+                    "byok_usage": 0.0
                 }
             ]
         }
@@ -216,6 +217,76 @@ func testRealtimeAnalyticsProcessingAndMerging() throws {
     print("  ✅ Real-time Analytics query decoding, SGT timezone & spend merging passed")
 }
 
+final class MockLaunchService: LaunchServiceProtocol {
+    var status: SMAppService.Status = .notRegistered
+    var shouldFail: Bool = false
+    var openedSystemSettings: Bool = false
+
+    func register() throws {
+        if shouldFail {
+            throw NSError(domain: "SMAppServiceError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Permission denied"])
+        }
+        status = .enabled
+    }
+
+    func unregister() throws {
+        if shouldFail {
+            throw NSError(domain: "SMAppServiceError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unregister failed"])
+        }
+        status = .notRegistered
+    }
+
+    func openSystemSettings() {
+        openedSystemSettings = true
+    }
+}
+
+@MainActor
+func testLaunchAtLoginManager() {
+    let mock = MockLaunchService()
+    let manager = LaunchAtLoginManager(service: mock)
+
+    assert(!manager.isEnabled, "Initial state should be disabled")
+    assert(manager.status == .notRegistered, "Initial status should be notRegistered")
+
+    // Test enabling
+    manager.setLaunchAtLogin(true)
+    assert(manager.isEnabled, "Should be enabled after setLaunchAtLogin(true)")
+    assert(manager.status == .enabled, "Status should be enabled")
+    assert(manager.errorMessage == nil, "Error message should be nil")
+
+    // Test disabling
+    manager.setLaunchAtLogin(false)
+    assert(!manager.isEnabled, "Should be disabled after setLaunchAtLogin(false)")
+    assert(manager.status == .notRegistered, "Status should be notRegistered")
+
+    // Test failure handling
+    mock.shouldFail = true
+    manager.setLaunchAtLogin(true)
+    assert(!manager.isEnabled, "Should remain disabled on failure")
+    assert(manager.errorMessage != nil, "Error message should be set on failure")
+
+    // Test requires approval state
+    mock.shouldFail = false
+    mock.status = .requiresApproval
+    manager.refreshStatus()
+    assert(!manager.isEnabled, "requiresApproval should not be considered enabled")
+    assert(manager.status == .requiresApproval, "Status should reflect requiresApproval")
+
+    // Test openSystemSettings
+    manager.openSystemSettings()
+    assert(mock.openedSystemSettings, "openSystemSettings should delegate to service")
+
+    // Test CLI argument parsing
+    assert(LaunchAtLoginManager.handleCommandLineArgs(["peek", "api", "login", "status"], manager: manager) == true)
+    assert(LaunchAtLoginManager.handleCommandLineArgs(["peek", "api", "login", "on"], manager: manager) == true)
+    assert(LaunchAtLoginManager.handleCommandLineArgs(["peek", "api", "login", "off"], manager: manager) == true)
+    assert(LaunchAtLoginManager.handleCommandLineArgs(["peek", "api"], manager: manager) == false)
+    assert(LaunchAtLoginManager.handleCommandLineArgs(["peek"], manager: manager) == false)
+
+    print("  ✅ LaunchAtLoginManager registration, unregistration, status & CLI checks passed")
+}
+
 // MARK: - Main Test Runner
 @main
 struct PeekCheckRunner {
@@ -228,7 +299,8 @@ struct PeekCheckRunner {
             testSpendEngineThresholds()
             try testKeyResolverCommandAndConfig()
             try testRealtimeAnalyticsProcessingAndMerging()
-            print("\n🎉 ALL CHECKS PASSED (6/6 suites)")
+            testLaunchAtLoginManager()
+            print("\n🎉 ALL CHECKS PASSED (7/7 suites)")
         } catch {
             print("❌ Check failed with error: \(error)")
             exit(1)

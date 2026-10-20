@@ -81,7 +81,7 @@ public struct ActivityItem: Codable, Equatable {
     }
 
     public var isBYOK: Bool {
-        byokCost > 0 || (providerName != nil && providerName?.lowercased() != "openrouter")
+        byokCost > 0
     }
 }
 
@@ -149,19 +149,28 @@ public struct AnalyticsQueryItem: Codable, Equatable {
     public let model: String?
     public let provider: String?
     public let totalUsage: Double?
+    public let byokUsage: Double?
     public let usage: Double?
 
     enum CodingKeys: String, CodingKey {
         case model
         case provider
         case totalUsage = "total_usage"
+        case byokUsage = "byok_usage"
         case usage
     }
 
-    public init(model: String?, provider: String? = nil, totalUsage: Double? = nil, usage: Double? = nil) {
+    public init(
+        model: String?,
+        provider: String? = nil,
+        totalUsage: Double? = nil,
+        byokUsage: Double? = nil,
+        usage: Double? = nil
+    ) {
         self.model = model
         self.provider = provider
         self.totalUsage = totalUsage
+        self.byokUsage = byokUsage
         self.usage = usage
     }
 
@@ -170,10 +179,7 @@ public struct AnalyticsQueryItem: Codable, Equatable {
     }
 
     public var isBYOK: Bool {
-        if let provider = provider, provider.lowercased() != "openrouter" {
-            return true
-        }
-        return false
+        (byokUsage ?? 0.0) > 0
     }
 }
 

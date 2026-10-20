@@ -135,8 +135,8 @@ public final class OpenRouterClient: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         let query = AnalyticsQueryRequest(
-            metrics: ["total_usage"],
-            dimensions: ["model", "provider"],
+            metrics: ["total_usage", "byok_usage"],
+            dimensions: ["model"],
             timeRange: .init(start: startISO, end: endISO)
         )
         request.httpBody = try JSONEncoder().encode(query)
@@ -222,12 +222,15 @@ public final class OpenRouterClient: Sendable {
                 isBYOK: current.isBYOK || item.isBYOK
             )
 
+            let byokCost = item.byokUsage ?? (item.isBYOK ? cost : 0.0)
+            let walletCost = max(0.0, cost - byokCost)
+
             todayItems.append(ActivityItem(
                 date: todayString,
                 model: model,
                 providerName: item.provider,
-                usage: item.isBYOK ? 0.0 : cost,
-                byokUsageInference: item.isBYOK ? cost : 0.0,
+                usage: walletCost,
+                byokUsageInference: byokCost,
                 requests: nil
             ))
         }

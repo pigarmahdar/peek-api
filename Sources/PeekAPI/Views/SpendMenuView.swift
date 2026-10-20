@@ -1,11 +1,14 @@
 import SwiftUI
 import PeekAPICore
 
+@MainActor
 public struct SpendMenuView: View {
     @ObservedObject var engine: SpendEngine
+    @ObservedObject var launchManager: LaunchAtLoginManager
 
-    public init(engine: SpendEngine) {
+    public init(engine: SpendEngine, launchManager: LaunchAtLoginManager? = nil) {
         self.engine = engine
+        self.launchManager = launchManager ?? .shared
     }
 
     private var statusColor: Color {
@@ -19,7 +22,7 @@ public struct SpendMenuView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if !engine.isKeyConfigured || engine.isEditingKey {
-                setupKeySection
+                settingsSection
             } else {
                 burnHeaderSection
                 modelsSection
@@ -74,7 +77,7 @@ public struct SpendMenuView: View {
             }
 
             HStack(alignment: .firstTextBaseline) {
-                Text("Daily Spend")
+                Text("Daily Spend / Target")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
@@ -206,7 +209,7 @@ public struct SpendMenuView: View {
                 Button(action: {
                     engine.isEditingKey = true
                 }) {
-                    Label("Key", systemImage: "key")
+                    Label("Settings", systemImage: "gearshape")
                 }
                 .buttonStyle(.borderless)
 
@@ -225,14 +228,14 @@ public struct SpendMenuView: View {
     }
 
     @ViewBuilder
-    private var setupKeySection: some View {
+    private var settingsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("OpenRouter Key", systemImage: "key.fill")
+                Label("Settings", systemImage: "gearshape.fill")
                     .font(.headline)
                 Spacer()
                 if engine.isEditingKey && engine.isKeyConfigured {
-                    Button("Cancel") {
+                    Button("Done") {
                         engine.isEditingKey = false
                     }
                     .buttonStyle(.borderless)
@@ -240,38 +243,97 @@ public struct SpendMenuView: View {
                 }
             }
 
-            Text("Paste your OpenRouter Management Key (`sk-or-v1-...`) to track real-time inference burn.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            VStack(alignment: .leading, spacing: 6) {
-                SecureField("sk-or-v1-...", text: $engine.inputKey)
-                    .textFieldStyle(.roundedBorder)
-
-                HStack {
-                    Spacer()
-                    Button("Save Key") {
-                        Task {
-                            let success = await engine.saveKey(engine.inputKey)
-                            if success {
-                                engine.isEditingKey = false
-                                engine.inputKey = ""
-                            }
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(engine.inputKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-            .padding(10)
-            .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-            Text("Key is saved locally to ~/.config/peek-api/config.json")
-                .font(.caption2)
-                .foregroundColor(.secondary)
+            startupCard
+            keyCard
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var startupCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Launch at Login", systemImage: "macwindow")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { launchManager.isEnabled },
+                    set: { launchManager.setLaunchAtLogin($0) }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
+            }
+
+            Text("Start peek-api automatically when logging into macOS.")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+            if launchManager.status == .requiresApproval {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                        .font(.caption)
+                    Text("Disabled in macOS Settings")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button("Open Settings") {
+                        launchManager.openSystemSettings()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption2.weight(.medium))
+                }
+                .padding(6)
+                .background(Color.orange.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+
+            if let error = launchManager.errorMessage {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundColor(.red)
+            }
+        }
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var keyCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("OpenRouter Key", systemImage: "key.fill")
+                .font(.subheadline.weight(.semibold))
+
+            Text("Paste your OpenRouter Management Key (`sk-or-v1-...`) to track real-time inference burn.")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+            SecureField("sk-or-v1-...", text: $engine.inputKey)
+                .textFieldStyle(.roundedBorder)
+
+            HStack {
+                Text("Saved to ~/.config/peek-api/config.json")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button("Save Key") {
+                    Task {
+                        let success = await engine.saveKey(engine.inputKey)
+                        if success {
+                            engine.isEditingKey = false
+                            engine.inputKey = ""
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(engine.inputKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }

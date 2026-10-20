@@ -8,6 +8,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "peek-api", targets: ["PeekAPI"]),
+        .executable(name: "peek", targets: ["PeekAPI"]),
         .executable(name: "peek-check", targets: ["PeekAPICheck"])
     ],
     targets: [

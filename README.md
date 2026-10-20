@@ -42,13 +42,29 @@ git clone https://github.com/pigarmahdar/peek-api.git
 cd peek-api
 
 # Run the app
-swift run peek-api
+swift run peek api
 ```
+
+### Launch at Login (Persistent Ambient Monitoring)
+
+Activate the app once and leave it alone across macOS reboots:
+
+```bash
+# Enable autostart on macOS login
+swift run peek api login on
+
+# Check current status
+swift run peek api login status
+
+# Disable autostart
+swift run peek api login off
+```
+You can also toggle **Launch at Login** at any time by clicking **Settings** (⚙️) in the menu bar popover.
 
 To build an optimized release binary:
 ```bash
 swift build -c release
-open .build/release/peek-api
+open .build/release/peek
 ```
 
 ---
@@ -57,7 +73,7 @@ open .build/release/peek-api
 
 `peek-api` requires an OpenRouter Management Key (`sk-or-v1-...`) to query analytics and wallet balances. You can configure it in any of the following ways:
 
-1. **In-App (Recommended):** Click **Key** in the menu bar popover and paste your key. It is saved locally to `~/.config/peek-api/config.json`.
+1. **In-App (Recommended):** Click **Settings** (⚙️) in the menu bar popover and paste your key. It is saved locally to `~/.config/peek-api/config.json`.
 2. **Environment Variable:**
    ```bash
    export OPENROUTER_MANAGEMENT_KEY="sk-or-v1-..."

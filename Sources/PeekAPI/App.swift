@@ -13,12 +13,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct PeekAPIApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var engine = SpendEngine()
+    @StateObject private var launchManager = LaunchAtLoginManager.shared
+
+    init() {
+        if LaunchAtLoginManager.handleCommandLineArgs(CommandLine.arguments) {
+            exit(0)
+        }
+    }
 
     var body: some Scene {
         MenuBarExtra {
-            SpendMenuView(engine: engine)
+            SpendMenuView(engine: engine, launchManager: launchManager)
                 .onAppear {
                     engine.startPolling()
+                    launchManager.refreshStatus()
                 }
         } label: {
             Text(engine.menuBarTitle)
