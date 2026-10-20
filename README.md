@@ -92,4 +92,4 @@ swift run peek-check
 
 ## License
 
-[MIT](LICENSE) © 2026 Pigarm Ahdar
+[MIT](LICENSE) © 2026 Pigar Mahdar
