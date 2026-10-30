@@ -14,6 +14,12 @@ public final class SpendEngine: ObservableObject {
     @Published public var isKeyConfigured: Bool = false
     @Published public var inputKey: String = ""
     @Published public var isEditingKey: Bool = false
+    @Published public var hoveredModelId: String? = nil
+    @Published public private(set) var modelCatalog: [String: ModelCatalogItem] = [:]
+
+    public var modelPricingMap: [String: ModelPricing] {
+        modelCatalog.mapValues { $0.pricing }
+    }
 
     // Budget Pacing Configurations
     public var monthlyBudget: Double = 25.00
@@ -30,6 +36,12 @@ public final class SpendEngine: ObservableObject {
         self.client = client
         self.keyResolver = keyResolver
         self.isKeyConfigured = keyResolver.resolveKey() != nil
+        if let cached = client.loadCachedModelCatalog() {
+            self.modelCatalog = cached
+        }
+        Task { [weak self] in
+            await self?.refreshModelCatalogIfNeeded()
+        }
     }
 
     // MARK: - Menu Bar Display Strings
@@ -51,7 +63,7 @@ public final class SpendEngine: ObservableObject {
 
     // MARK: - Polling & Refresh
 
-    public func startPolling(interval: TimeInterval = 900) { // 15 minutes default
+    public func startPolling(interval: TimeInterval = 300) { // 5 minutes default
         Task {
             await refresh()
         }
@@ -89,7 +101,7 @@ public final class SpendEngine: ObservableObject {
 
         do {
             async let creditsTask = client.fetchCredits()
-            async let activityTask = client.fetchActivity()
+            async let activityTask = client.fetchActivity(modelPricing: self.modelPricingMap)
 
             let (credits, activity) = try await (creditsTask, activityTask)
 
@@ -100,6 +112,11 @@ public final class SpendEngine: ObservableObject {
             self.status = calculateStatus(for: activity.todaySpend)
             self.lastUpdated = Date()
             self.errorMessage = nil
+
+            // Refresh model catalog in background if not loaded or cache needs update
+            Task { [weak self] in
+                await self?.refreshModelCatalogIfNeeded()
+            }
         } catch let error as OpenRouterError {
             self.errorMessage = error.localizedDescription
             if error == .missingKey || error == .unauthorized {
@@ -111,6 +128,37 @@ public final class SpendEngine: ObservableObject {
 
         isLoading = false
         isRefreshing = false
+    }
+
+    public func refreshModelCatalogIfNeeded(forceRefresh: Bool = false) async {
+        do {
+            let catalog = try await client.fetchModelCatalog(forceRefresh: forceRefresh)
+            self.modelCatalog = catalog
+            attachPricingToModels()
+        } catch {
+            // Non-fatal background error
+        }
+    }
+
+    public func findCatalogItem(for modelId: String) -> ModelCatalogItem? {
+        modelCatalog.lookupItem(for: modelId)
+    }
+
+    private func attachPricingToModels() {
+        guard !modelCatalog.isEmpty else { return }
+        self.models = self.models.map { item in
+            guard item.pricing == nil, let catalogItem = findCatalogItem(for: item.rawModelId) else {
+                return item
+            }
+            return ModelSpendSummary(
+                rawModelId: item.rawModelId,
+                displayName: item.displayName,
+                cost: item.cost,
+                percentage: item.percentage,
+                isBYOK: item.isBYOK,
+                pricing: catalogItem.pricing
+            )
+        }
     }
 
     public func calculateStatus(for spend: Double) -> SpendingStatus {

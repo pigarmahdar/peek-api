@@ -93,7 +93,7 @@ To check burn rate, token volume, or remaining balances, users are forced to rep
    * **Data Extracted:** `total_credits - total_usage` = remaining wallet balance.
 
 ### B. Polling Strategy & Performance
-* **Background Polling:** Every 10–15 minutes (avoids rate limits and preserves battery life).
+* **Background Polling:** Every 5 minutes (avoids rate limits and preserves battery life).
 * **Immediate Refresh:** Triggered manually via the "🔄 Refresh" button or automatically when the user opens the dropdown.
 * **Local Storage / Keychain:** Management API key stored securely in the macOS Keychain (`Security.framework`). User preferences (monthly budget cap, polling interval) stored in standard `UserDefaults`.
 

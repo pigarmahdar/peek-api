@@ -128,30 +128,7 @@ public struct SpendMenuView: View {
             } else {
                 VStack(spacing: 4) {
                     ForEach(engine.models.prefix(5)) { item in
-                        HStack(spacing: 6) {
-                            Image(systemName: item.isBYOK ? "key.fill" : "bolt.fill")
-                                .font(.system(size: 10))
-                                .foregroundColor(item.isBYOK ? .orange : .blue)
-                                .frame(width: 14)
-
-                            Text(item.displayName)
-                                .font(.callout)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-
-                            Spacer()
-
-                            Text("$\(String(format: "%.2f", item.cost))")
-                                .font(.callout.weight(.medium))
-                                .monospacedDigit()
-
-                            Text("(\(Int(item.percentage))%)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .monospacedDigit()
-                                .frame(minWidth: 36, alignment: .trailing)
-                        }
-                        .padding(.vertical, 1)
+                        modelRow(for: item)
                     }
                 }
             }
@@ -159,6 +136,61 @@ public struct SpendMenuView: View {
         .padding(10)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func modelRow(for item: ModelSpendSummary) -> some View {
+        let isHovered = (engine.hoveredModelId == item.rawModelId)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Image(systemName: item.isBYOK ? "key.fill" : "bolt.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(item.isBYOK ? .orange : .blue)
+                    .frame(width: 14)
+
+                Text(item.displayName)
+                    .font(.callout)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Spacer()
+
+                Text("$\(String(format: "%.2f", item.cost))")
+                    .font(.callout.weight(.medium))
+                    .monospacedDigit()
+
+                Text("(\(Int(item.percentage))%)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .monospacedDigit()
+                    .frame(minWidth: 36, alignment: .trailing)
+            }
+
+            if isHovered, let pricing = item.pricing {
+                HStack(spacing: 4) {
+                    Text("Input: $\(String(format: "%.2f", pricing.promptPerMillion))/1M")
+                    Text("•")
+                        .opacity(0.4)
+                    Text("Output: $\(String(format: "%.2f", pricing.completionPerMillion))/1M")
+                }
+                .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                .foregroundColor(.secondary)
+                .padding(.leading, 20)
+                .padding(.top, 1)
+                .transition(.opacity)
+            }
+        }
+        .padding(.vertical, 2)
+        .padding(.horizontal, 4)
+        .background(isHovered ? Color.primary.opacity(0.06) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .contentShape(Rectangle())
+        .onHover { hovered in
+            withAnimation(.easeInOut(duration: 0.12)) {
+                engine.hoveredModelId = hovered ? item.rawModelId : nil
+            }
+        }
+        .help(item.pricingTooltip)
     }
 
     @ViewBuilder
@@ -196,7 +228,7 @@ public struct SpendMenuView: View {
                 Spacer()
 
                 Button(action: {
-                    if let url = URL(string: "https://openrouter.ai/activity") {
+                    if let url = URL(string: "https://openrouter.ai/activity/explore?metric=total_usage&granularity=day&date_preset=month_to_date") {
                         NSWorkspace.shared.open(url)
                     }
                 }) {

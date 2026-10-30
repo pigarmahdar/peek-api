@@ -217,6 +217,48 @@ func testRealtimeAnalyticsProcessingAndMerging() throws {
     print("  ✅ Real-time Analytics query decoding, SGT timezone & spend merging passed")
 }
 
+func testRealtimeSnapshotAndDateFormatAlignment() throws {
+    let client = OpenRouterClient()
+    let sgt = TimeZone(secondsFromGMT: 8 * 3600)!
+    let testDate = Date(timeIntervalSince1970: 1792472400) // 2026-10-20 13:00 SGT
+
+    // 1. Test processRealtimeSnapshot
+    let todayItems = [
+        AnalyticsQueryItem(model: "xiaomi/mimo-v2.6-flash-20260921", totalUsage: 0.66, byokUsage: 0.64),
+        AnalyticsQueryItem(model: "deepseek/deepseek-v4.1-flash-20261017", totalUsage: 0.46, byokUsage: 0.30)
+    ]
+    let monthItems = [
+        AnalyticsQueryItem(model: "qwen/qwen3.8-omni-flash-20260918", totalUsage: 3.12),
+        AnalyticsQueryItem(model: "anthropic/claude-haiku-5.5-20261007", totalUsage: 2.29),
+        AnalyticsQueryItem(model: "xiaomi/mimo-v2.6-flash-20260921", totalUsage: 0.66),
+        AnalyticsQueryItem(model: "deepseek/deepseek-v4.1-flash-20261017", totalUsage: 0.46)
+    ]
+
+    let snapshot = client.processRealtimeSnapshot(today: todayItems, month: monthItems, relativeTo: testDate, timeZone: sgt)
+    assert(snapshot.todayDateUTC == "2026-10-20", "today date mismatch")
+    assert(abs(snapshot.todaySpend - 1.12) < 0.001, "todaySpend mismatch")
+    assert(abs(snapshot.monthToDateSpend - 6.53) < 0.001, "monthToDateSpend mismatch")
+    assert(snapshot.topModelsToday.count == 2, "topModelsToday count mismatch")
+    assert(snapshot.topModelsToday[0].displayName == "Mimo V2.6 Flash", "top model display name mismatch")
+    assert(snapshot.topModelsToday[0].isBYOK == true, "top model BYOK mismatch")
+
+    // 2. Test date format handling with OpenRouter's "YYYY-MM-DD 00:00:00" strings in activity fallback
+    let activityWithTimestamps = [
+        ActivityItem(date: "2026-10-20 00:00:00", model: "openai/gpt-4o", usage: 0.75),
+        ActivityItem(date: "2026-10-19 00:00:00", model: "openai/gpt-4o", usage: 1.25)
+    ]
+    let fallbackSnapshot = client.processActivityItems(activityWithTimestamps, relativeTo: testDate, timeZone: sgt)
+    assert(abs(fallbackSnapshot.todaySpend - 0.75) < 0.001, "fallback todaySpend should match timestamped date")
+    assert(abs(fallbackSnapshot.monthToDateSpend - 2.00) < 0.001, "fallback monthToDateSpend mismatch")
+
+    // 3. Test that processWithRealtime excludes timestamped today from historical items
+    let merged = client.processWithRealtime(historical: activityWithTimestamps, realtime: todayItems, relativeTo: testDate, timeZone: sgt)
+    assert(abs(merged.todaySpend - 1.12) < 0.001, "merged today spend mismatch")
+    assert(abs(merged.monthToDateSpend - (1.25 + 1.12)) < 0.001, "merged month spend should exclude today's historical item")
+
+    print("  ✅ Real-time Snapshot & OpenRouter timestamped activity date alignment passed")
+}
+
 final class MockLaunchService: LaunchServiceProtocol {
     var status: SMAppService.Status = .notRegistered
     var shouldFail: Bool = false
@@ -287,6 +329,87 @@ func testLaunchAtLoginManager() {
     print("  ✅ LaunchAtLoginManager registration, unregistration, status & CLI checks passed")
 }
 
+func testModelPricingDecodingAndTooltip() throws {
+    let json = """
+    {
+        "data": [
+            {
+                "id": "deepseek/deepseek-chat",
+                "name": "DeepSeek: DeepSeek V3",
+                "context_length": 64000,
+                "pricing": {
+                    "prompt": "0.00000014",
+                    "completion": "0.00000028"
+                }
+            },
+            {
+                "id": "anthropic/claude-3.5-sonnet",
+                "name": "Claude 3.5 Sonnet",
+                "context_length": 200000,
+                "pricing": {
+                    "prompt": 0.000003,
+                    "completion": 0.000015
+                }
+            }
+        ]
+    }
+    """.data(using: .utf8)!
+
+    let envelope = try JSONDecoder().decode(ModelCatalogEnvelope.self, from: json)
+    assert(envelope.data.count == 2, "Model catalog count mismatch")
+
+    let deepseek = envelope.data[0]
+    assert(deepseek.id == "deepseek/deepseek-chat", "Model ID mismatch")
+    assert(abs(deepseek.pricing.promptPerMillion - 0.14) < 0.001, "DeepSeek promptPerMillion mismatch")
+    assert(abs(deepseek.pricing.completionPerMillion - 0.28) < 0.001, "DeepSeek completionPerMillion mismatch")
+
+    let sonnet = envelope.data[1]
+    assert(abs(sonnet.pricing.promptPerMillion - 3.00) < 0.001, "Sonnet promptPerMillion mismatch")
+    assert(abs(sonnet.pricing.completionPerMillion - 15.00) < 0.001, "Sonnet completionPerMillion mismatch")
+
+    // Verify ModelSpendSummary tooltip formatting
+    let summaryWithPricing = ModelSpendSummary(
+        rawModelId: deepseek.id,
+        displayName: "DeepSeek V3",
+        cost: 0.11,
+        percentage: 24.0,
+        isBYOK: true,
+        pricing: deepseek.pricing
+    )
+    let expectedTooltip = "Input:  $0.14 / 1M tokens\nOutput: $0.28 / 1M tokens"
+    assert(summaryWithPricing.pricingTooltip == expectedTooltip, "Tooltip text mismatch:\n'\(summaryWithPricing.pricingTooltip)' vs '\(expectedTooltip)'")
+
+    let summaryWithoutPricing = ModelSpendSummary(
+        rawModelId: "custom/unknown",
+        displayName: "Unknown",
+        cost: 0.05,
+        percentage: 10.0,
+        isBYOK: false
+    )
+    assert(summaryWithoutPricing.pricingTooltip == "Pricing unavailable", "Fallback tooltip mismatch")
+
+    // Verify OpenRouterClient caching with isolated temp file
+    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("peek_test_cache_\(UUID().uuidString).json")
+    defer { try? FileManager.default.removeItem(at: tempURL) }
+    let client = OpenRouterClient(cacheFileURL: tempURL)
+    var catalogMap: [String: ModelCatalogItem] = [:]
+    for item in envelope.data {
+        catalogMap[item.id] = item
+    }
+    client.saveModelCatalogToCache(catalogMap)
+
+    let loaded = client.loadCachedModelCatalog(maxAge: 3600)
+    assert(loaded != nil, "Failed to load cached model catalog")
+    assert(loaded?["deepseek/deepseek-chat"]?.pricing.promptPerMillion == deepseek.pricing.promptPerMillion, "Cached item mismatch")
+
+    // Verify date-versioned slug lookup
+    let pricingMap = catalogMap.mapValues { $0.pricing }
+    assert(catalogMap.lookupItem(for: "deepseek/deepseek-chat-20261017")?.id == "deepseek/deepseek-chat", "Date slug item lookup mismatch")
+    assert(pricingMap.lookupPricing(for: "anthropic/claude-3.5-sonnet-20260922")?.promptPerMillion == 3.00, "Date slug pricing lookup mismatch")
+
+    print("  ✅ Model pricing decoding (string/float), per-million math, tooltip & disk cache checks passed")
+}
+
 // MARK: - Main Test Runner
 @main
 struct PeekCheckRunner {
@@ -299,8 +422,10 @@ struct PeekCheckRunner {
             testSpendEngineThresholds()
             try testKeyResolverCommandAndConfig()
             try testRealtimeAnalyticsProcessingAndMerging()
+            try testRealtimeSnapshotAndDateFormatAlignment()
             testLaunchAtLoginManager()
-            print("\n🎉 ALL CHECKS PASSED (7/7 suites)")
+            try testModelPricingDecodingAndTooltip()
+            print("\n🎉 ALL CHECKS PASSED (9/9 suites)")
         } catch {
             print("❌ Check failed with error: \(error)")
             exit(1)

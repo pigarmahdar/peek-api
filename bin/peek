@@ -8,8 +8,14 @@ REPO_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
 RELEASE_BIN="$REPO_DIR/.build/release/peek"
 DEBUG_BIN="$REPO_DIR/.build/debug/peek"
 
-# Prefer release binary if available, otherwise debug
-if [ -x "$RELEASE_BIN" ]; then
+# Pick the newest binary between release and debug if both exist
+if [ -x "$RELEASE_BIN" ] && [ -x "$DEBUG_BIN" ]; then
+    if [ "$RELEASE_BIN" -nt "$DEBUG_BIN" ]; then
+        TARGET_BIN="$RELEASE_BIN"
+    else
+        TARGET_BIN="$DEBUG_BIN"
+    fi
+elif [ -x "$RELEASE_BIN" ]; then
     TARGET_BIN="$RELEASE_BIN"
 elif [ -x "$DEBUG_BIN" ]; then
     TARGET_BIN="$DEBUG_BIN"

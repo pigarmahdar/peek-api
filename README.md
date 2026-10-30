@@ -19,6 +19,7 @@ Running autonomous harnesses, multi-agent workflows, or coding assistants (Curso
 * **Real-Time Analytics:** Powered by OpenRouter's `analytics/query` API rather than delayed batch activity snapshots.
 * **Local Timezone Aware:** Aligns spend boundaries with your machine's local calendar day (e.g. SGT / GMT+8) instead of forcing UTC midnight cuts.
 * **Unified Cost (BYOK & Wallet):** Tracks both OpenRouter credit deductions (`⚡`) and direct upstream provider costs (`🔑` Google, DeepSeek, Xiaomi, Meta, etc.).
+* **Dynamic Model Pricing on Hover:** Instant glanceable aggregate input and output rates per 1M tokens when hovering over any top model in the popover.
 * **Budget Pacing:** Evaluates daily inference burn against a configurable monthly target ($25/mo ceiling) with visual status indicators:
   - 🟢 **On Track (< $0.80):** Under target daily pacing.
   - 🟡 **Pacing Warning ($0.80 – $1.50):** Borrowing against future days.

@@ -183,20 +183,105 @@ public struct AnalyticsQueryItem: Codable, Equatable {
     }
 }
 
-public struct ModelSpendSummary: Identifiable, Equatable {
+public struct ModelPricing: Codable, Equatable, Sendable {
+    public let prompt: Double
+    public let completion: Double
+    public let request: Double?
+    public let image: Double?
+
+    public var promptPerMillion: Double { prompt * 1_000_000 }
+    public var completionPerMillion: Double { completion * 1_000_000 }
+
+    public init(prompt: Double, completion: Double, request: Double? = nil, image: Double? = nil) {
+        self.prompt = prompt
+        self.completion = completion
+        self.request = request
+        self.image = image
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case prompt, completion, request, image
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.prompt = Self.decodeFlexibleDouble(container, key: .prompt) ?? 0.0
+        self.completion = Self.decodeFlexibleDouble(container, key: .completion) ?? 0.0
+        self.request = Self.decodeFlexibleDouble(container, key: .request)
+        self.image = Self.decodeFlexibleDouble(container, key: .image)
+    }
+
+    private static func decodeFlexibleDouble(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Double? {
+        if let d = try? container.decode(Double.self, forKey: key) {
+            return d
+        }
+        if let s = try? container.decode(String.self, forKey: key), let d = Double(s) {
+            return d
+        }
+        return nil
+    }
+}
+
+public struct ModelCatalogItem: Codable, Equatable, Sendable {
+    public let id: String
+    public let name: String?
+    public let contextLength: Int?
+    public let pricing: ModelPricing
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, pricing
+        case contextLength = "context_length"
+    }
+
+    public init(id: String, name: String? = nil, contextLength: Int? = nil, pricing: ModelPricing) {
+        self.id = id
+        self.name = name
+        self.contextLength = contextLength
+        self.pricing = pricing
+    }
+}
+
+public struct ModelCatalogEnvelope: Codable, Sendable {
+    public let data: [ModelCatalogItem]
+
+    public init(data: [ModelCatalogItem]) {
+        self.data = data
+    }
+}
+
+public struct ModelSpendSummary: Identifiable, Equatable, Sendable {
     public var id: String { rawModelId }
     public let rawModelId: String
     public let displayName: String
     public let cost: Double
     public let percentage: Double
     public let isBYOK: Bool
+    public let pricing: ModelPricing?
 
-    public init(rawModelId: String, displayName: String, cost: Double, percentage: Double, isBYOK: Bool) {
+    public init(
+        rawModelId: String,
+        displayName: String,
+        cost: Double,
+        percentage: Double,
+        isBYOK: Bool,
+        pricing: ModelPricing? = nil
+    ) {
         self.rawModelId = rawModelId
         self.displayName = displayName
         self.cost = cost
         self.percentage = percentage
         self.isBYOK = isBYOK
+        self.pricing = pricing
+    }
+
+    public var pricingTooltip: String {
+        guard let pricing = pricing else {
+            return "Pricing unavailable"
+        }
+        return """
+        Input:  $\(String(format: "%.2f", pricing.promptPerMillion)) / 1M tokens
+        Output: $\(String(format: "%.2f", pricing.completionPerMillion)) / 1M tokens
+        """
     }
 
     public static func cleanName(for modelId: String) -> String {
@@ -230,5 +315,59 @@ public enum SpendingStatus: Equatable {
         case .warning: return "Pacing Warning"
         case .alert: return "High Burn"
         }
+    }
+}
+
+public extension Dictionary where Key == String, Value == ModelPricing {
+    func lookupPricing(for modelId: String) -> ModelPricing? {
+        if let direct = self[modelId] {
+            return direct
+        }
+        var normalized = modelId
+        if let match = normalized.range(of: "-\\d{8}$", options: .regularExpression) {
+            normalized.removeSubrange(match)
+            if let matchItem = self[normalized] {
+                return matchItem
+            }
+        }
+        if let colonIndex = normalized.firstIndex(of: ":") {
+            let baseId = String(normalized[..<colonIndex])
+            if let baseMatch = self[baseId] {
+                return baseMatch
+            }
+        }
+        for (k, v) in self {
+            if k.hasPrefix(normalized) {
+                return v
+            }
+        }
+        return nil
+    }
+}
+
+public extension Dictionary where Key == String, Value == ModelCatalogItem {
+    func lookupItem(for modelId: String) -> ModelCatalogItem? {
+        if let direct = self[modelId] {
+            return direct
+        }
+        var normalized = modelId
+        if let match = normalized.range(of: "-\\d{8}$", options: .regularExpression) {
+            normalized.removeSubrange(match)
+            if let matchItem = self[normalized] {
+                return matchItem
+            }
+        }
+        if let colonIndex = normalized.firstIndex(of: ":") {
+            let baseId = String(normalized[..<colonIndex])
+            if let baseMatch = self[baseId] {
+                return baseMatch
+            }
+        }
+        for (k, v) in self {
+            if k.hasPrefix(normalized) {
+                return v
+            }
+        }
+        return nil
     }
 }
