@@ -92,18 +92,41 @@ func testModelCleanNames() {
 
 @MainActor
 func testSpendEngineThresholds() {
-    let engine = SpendEngine()
-    assert(engine.calculateStatus(for: 0.0) == .normal, "0.0 status mismatch")
-    assert(engine.calculateStatus(for: 0.46) == .normal, "0.46 status mismatch")
-    assert(engine.calculateStatus(for: 0.79) == .normal, "0.79 status mismatch")
+    let tempConfig = FileManager.default.temporaryDirectory.appendingPathComponent("peek_test_config_\(UUID().uuidString).json")
+    defer { try? FileManager.default.removeItem(at: tempConfig) }
+    let isolatedResolver = KeyResolver(configFileURL: tempConfig)
+    let engine = SpendEngine(keyResolver: isolatedResolver)
 
-    assert(engine.calculateStatus(for: 0.80) == .warning, "0.80 status mismatch")
-    assert(engine.calculateStatus(for: 1.20) == .warning, "1.20 status mismatch")
-    assert(engine.calculateStatus(for: 1.50) == .warning, "1.50 status mismatch")
+    // 1. Test calendar days in month & daily rate math
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = TimeZone(secondsFromGMT: 0)!
 
-    assert(engine.calculateStatus(for: 1.51) == .alert, "1.51 status mismatch")
-    assert(engine.calculateStatus(for: 3.50) == .alert, "3.50 status mismatch")
+    let feb2026 = cal.date(from: DateComponents(year: 2026, month: 2, day: 15))!
+    let feb2024Leap = cal.date(from: DateComponents(year: 2024, month: 2, day: 15))!
+    let nov2026 = cal.date(from: DateComponents(year: 2026, month: 11, day: 3))!
+    let oct2026 = cal.date(from: DateComponents(year: 2026, month: 10, day: 20))!
 
+    assert(SpendEngine.daysInMonth(for: feb2026, calendar: cal) == 28, "Feb 2026 should have 28 days")
+    assert(SpendEngine.daysInMonth(for: feb2024Leap, calendar: cal) == 29, "Feb 2024 leap year should have 29 days")
+    assert(SpendEngine.daysInMonth(for: nov2026, calendar: cal) == 30, "Nov 2026 should have 30 days")
+    assert(SpendEngine.daysInMonth(for: oct2026, calendar: cal) == 31, "Oct 2026 should have 31 days")
+
+    let rate30 = SpendEngine.calculateDailyRate(monthlyBudget: 30.0, on: nov2026, calendar: cal)
+    assert(abs(rate30 - 1.00) < 0.0001, "Daily rate for $30 in 30-day month should be $1.00")
+
+    // 2. Test dynamic status thresholds (Warning > 1.0x, Alert > 3.0x)
+    assert(engine.calculateStatus(for: 0.0, dailyRate: 1.00) == .normal, "0.0 status mismatch")
+    assert(engine.calculateStatus(for: 0.80, dailyRate: 1.00) == .normal, "0.80 status mismatch")
+    assert(engine.calculateStatus(for: 1.00, dailyRate: 1.00) == .normal, "1.00 exact 1.0x should be normal")
+
+    assert(engine.calculateStatus(for: 1.01, dailyRate: 1.00) == .warning, "1.01 (>1.0x) should be warning")
+    assert(engine.calculateStatus(for: 2.50, dailyRate: 1.00) == .warning, "2.50 (<=3.0x) should be warning")
+    assert(engine.calculateStatus(for: 3.00, dailyRate: 1.00) == .warning, "3.00 exact 3.0x should be warning")
+
+    assert(engine.calculateStatus(for: 3.01, dailyRate: 1.00) == .alert, "3.01 (>3.0x) should be alert")
+    assert(engine.calculateStatus(for: 5.00, dailyRate: 1.00) == .alert, "5.00 should be alert")
+
+    // 3. Test UI strings & percentage
     engine.isKeyConfigured = false
     assert(engine.menuBarTitle == "⚡ Setup Key", "menuBarTitle unconfigured mismatch")
 
@@ -115,7 +138,18 @@ func testSpendEngineThresholds() {
     engine.monthSpend = 12.50
     assert(engine.monthPercentage == 50, "monthPercentage mismatch")
 
-    print("  ✅ SpendEngine pacing thresholds & UI strings passed")
+    // 4. Test saveBudget validation and persistence
+    assert(engine.saveBudget("invalid") == false, "saveBudget should reject non-numeric input")
+    assert(engine.budgetErrorMessage != nil, "budgetErrorMessage should be set on invalid input")
+    assert(engine.saveBudget("-10") == false, "saveBudget should reject negative budget")
+
+    engine.todaySpend = 3.50
+    assert(engine.saveBudget("$60.00") == true, "saveBudget should accept currency-prefixed positive input")
+    assert(engine.budgetErrorMessage == nil, "budgetErrorMessage should clear on valid save")
+    assert(engine.monthlyBudget == 60.00, "monthlyBudget should update to 60.00")
+    assert(isolatedResolver.resolveBudgetTarget() == 60.00, "Persisted budget target should be 60.00")
+
+    print("  ✅ SpendEngine dynamic pacing thresholds, calendar math & budget persistence passed")
 }
 
 func testKeyResolverCommandAndConfig() throws {
@@ -128,23 +162,44 @@ func testKeyResolverCommandAndConfig() throws {
 
     let jsonWithKey = """
     {
-        "key": "sk-or-v1-direct"
+        "key": "sk-or-v1-direct",
+        "monthly_budget_target": 45.5
     }
     """.data(using: .utf8)!
 
     let config1 = try JSONDecoder().decode(KeyResolver.PeekConfigFile.self, from: jsonWithKey)
     assert(config1.key == "sk-or-v1-direct", "config1 key mismatch")
     assert(config1.keyCommand == nil, "config1 keyCommand mismatch")
+    assert(config1.monthlyBudgetTarget == 45.5, "config1 monthlyBudgetTarget mismatch")
 
-    let jsonWithCommand = """
+    let jsonWithCommandAndStringBudget = """
     {
-        "key_command": "bw get password openrouter-management"
+        "key_command": "bw get password openrouter-management",
+        "monthly_budget_target": "$100.00"
     }
     """.data(using: .utf8)!
 
-    let config2 = try JSONDecoder().decode(KeyResolver.PeekConfigFile.self, from: jsonWithCommand)
+    let config2 = try JSONDecoder().decode(KeyResolver.PeekConfigFile.self, from: jsonWithCommandAndStringBudget)
     assert(config2.keyCommand == "bw get password openrouter-management", "config2 keyCommand mismatch")
     assert(config2.key == nil, "config2 key mismatch")
+    assert(config2.monthlyBudgetTarget == 100.0, "config2 string monthlyBudgetTarget mismatch")
+
+    // Test atomic non-destructive config updates (key + budget preserve each other)
+    let tempConfig = FileManager.default.temporaryDirectory.appendingPathComponent("peek_atomic_\(UUID().uuidString).json")
+    defer { try? FileManager.default.removeItem(at: tempConfig) }
+    let isolatedResolver = KeyResolver(configFileURL: tempConfig)
+
+    assert(isolatedResolver.saveKey("sk-or-v1-preserved-key") == true, "saveKey failed")
+    assert(isolatedResolver.saveBudgetTarget(75.0) == true, "saveBudgetTarget failed")
+
+    let loaded = isolatedResolver.loadConfigFile()
+    assert(loaded?.key == "sk-or-v1-preserved-key", "saveBudgetTarget should preserve existing key")
+    assert(loaded?.monthlyBudgetTarget == 75.0, "saveBudgetTarget should persist monthly_budget_target")
+
+    assert(isolatedResolver.saveKey("sk-or-v1-updated-key") == true, "second saveKey failed")
+    let reloaded = isolatedResolver.loadConfigFile()
+    assert(reloaded?.key == "sk-or-v1-updated-key", "updated key mismatch")
+    assert(reloaded?.monthlyBudgetTarget == 75.0, "saveKey should preserve existing monthly_budget_target")
 
     // Test .env parsing
     let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -159,7 +214,7 @@ func testKeyResolverCommandAndConfig() throws {
     assert(envParsed == "sk-or-v1-dotenv-secret", "dotEnv parsing mismatch")
     try? FileManager.default.removeItem(at: tmpDir)
 
-    print("  ✅ KeyResolver command execution, config file decoding & .env parsing passed")
+    print("  ✅ KeyResolver command execution, config file decoding, atomic persistence & .env parsing passed")
 }
 
 func testRealtimeAnalyticsProcessingAndMerging() throws {

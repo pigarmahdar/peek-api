@@ -5,8 +5,11 @@ public final class KeyResolver: @unchecked Sendable {
 
     private let lock = NSLock()
     private var cachedKey: String?
+    private let customConfigURL: URL?
 
-    public init() {}
+    public init(configFileURL: URL? = nil) {
+        self.customConfigURL = configFileURL
+    }
 
     public func resolveKey() -> String? {
         lock.lock()
@@ -58,22 +61,25 @@ public final class KeyResolver: @unchecked Sendable {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
 
-        let fileManager = FileManager.default
-        let configDir = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".config/peek-api")
-        let configFile = configDir.appendingPathComponent("config.json")
-        do {
-            try fileManager.createDirectory(at: configDir, withIntermediateDirectories: true)
-            let json = """
-            {
-              "key": "\(trimmed)"
-            }
-            """
-            try json.write(to: configFile, atomically: true, encoding: .utf8)
-            invalidateCache()
+        let success = updateConfigFile { config in
+            config.key = trimmed
+        }
+        if success {
+            lock.lock()
             cachedKey = trimmed
-            return true
-        } catch {
-            return false
+            lock.unlock()
+        }
+        return success
+    }
+
+    public func resolveBudgetTarget() -> Double? {
+        loadConfigFile()?.monthlyBudgetTarget
+    }
+
+    public func saveBudgetTarget(_ budget: Double) -> Bool {
+        guard budget > 0 else { return false }
+        return updateConfigFile { config in
+            config.monthlyBudgetTarget = budget
         }
     }
 
@@ -115,23 +121,49 @@ public final class KeyResolver: @unchecked Sendable {
     // MARK: - Config File Resolver
 
     public struct PeekConfigFile: Codable {
-        public let key: String?
-        public let keyCommand: String?
+        public var key: String?
+        public var keyCommand: String?
+        public var monthlyBudgetTarget: Double?
+
+        public init(key: String? = nil, keyCommand: String? = nil, monthlyBudgetTarget: Double? = nil) {
+            self.key = key
+            self.keyCommand = keyCommand
+            self.monthlyBudgetTarget = monthlyBudgetTarget
+        }
 
         enum CodingKeys: String, CodingKey {
             case key
             case keyCommand = "key_command"
+            case monthlyBudgetTarget = "monthly_budget_target"
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.key = try container.decodeIfPresent(String.self, forKey: .key)
+            self.keyCommand = try container.decodeIfPresent(String.self, forKey: .keyCommand)
+            if let doubleVal = try? container.decodeIfPresent(Double.self, forKey: .monthlyBudgetTarget) {
+                self.monthlyBudgetTarget = doubleVal
+            } else if let stringVal = try? container.decodeIfPresent(String.self, forKey: .monthlyBudgetTarget),
+                      let parsed = Double(stringVal.trimmingCharacters(in: CharacterSet(charactersIn: "$ ").union(.whitespacesAndNewlines))) {
+                self.monthlyBudgetTarget = parsed
+            } else {
+                self.monthlyBudgetTarget = nil
+            }
         }
     }
 
-    private func resolveFromConfigFile() -> String? {
+    public func loadConfigFile() -> PeekConfigFile? {
         let fileManager = FileManager.default
-        let homeDir = fileManager.homeDirectoryForCurrentUser
-
-        let candidatePaths = [
-            homeDir.appendingPathComponent(".config/peek-api/config.json"),
-            homeDir.appendingPathComponent(".peek-api/config.json")
-        ]
+        let candidatePaths: [URL]
+        if let custom = customConfigURL {
+            candidatePaths = [custom]
+        } else {
+            let homeDir = fileManager.homeDirectoryForCurrentUser
+            candidatePaths = [
+                homeDir.appendingPathComponent(".config/peek-api/config.json"),
+                homeDir.appendingPathComponent(".peek-api/config.json")
+            ]
+        }
 
         for url in candidatePaths {
             guard fileManager.fileExists(atPath: url.path),
@@ -139,15 +171,47 @@ public final class KeyResolver: @unchecked Sendable {
                   let config = try? JSONDecoder().decode(PeekConfigFile.self, from: data) else {
                 continue
             }
+            return config
+        }
+        return nil
+    }
 
-            if let staticKey = config.key?.trimmingCharacters(in: .whitespacesAndNewlines), !staticKey.isEmpty {
-                return staticKey
-            }
+    private func updateConfigFile(_ mutate: (inout PeekConfigFile) -> Void) -> Bool {
+        let fileManager = FileManager.default
+        let configFile: URL
+        if let custom = customConfigURL {
+            configFile = custom
+        } else {
+            let configDir = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".config/peek-api")
+            configFile = configDir.appendingPathComponent("config.json")
+        }
 
-            if let cmd = config.keyCommand?.trimmingCharacters(in: .whitespacesAndNewlines), !cmd.isEmpty {
-                if let output = executeKeyCommand(cmd) {
-                    return output
-                }
+        var config = loadConfigFile() ?? PeekConfigFile()
+        mutate(&config)
+
+        do {
+            try fileManager.createDirectory(at: configFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(config)
+            try data.write(to: configFile, options: .atomic)
+            invalidateCache()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func resolveFromConfigFile() -> String? {
+        guard let config = loadConfigFile() else { return nil }
+
+        if let staticKey = config.key?.trimmingCharacters(in: .whitespacesAndNewlines), !staticKey.isEmpty {
+            return staticKey
+        }
+
+        if let cmd = config.keyCommand?.trimmingCharacters(in: .whitespacesAndNewlines), !cmd.isEmpty {
+            if let output = executeKeyCommand(cmd) {
+                return output
             }
         }
 

@@ -22,9 +22,22 @@ public final class SpendEngine: ObservableObject {
     }
 
     // Budget Pacing Configurations
-    public var monthlyBudget: Double = 25.00
+    @Published public var monthlyBudget: Double = 25.00
+    @Published public var inputBudget: String = "25.00"
+    @Published public var budgetErrorMessage: String? = nil
+
     public var dailyBudget: Double {
-        monthlyBudget / 30.0
+        Self.calculateDailyRate(monthlyBudget: monthlyBudget, on: Date())
+    }
+
+    public static func daysInMonth(for date: Date = Date(), calendar: Calendar = .current) -> Int {
+        calendar.range(of: .day, in: .month, for: date)?.count ?? 30
+    }
+
+    public static func calculateDailyRate(monthlyBudget: Double, on date: Date = Date(), calendar: Calendar = .current) -> Double {
+        guard monthlyBudget > 0 else { return 0.0 }
+        let days = Double(daysInMonth(for: date, calendar: calendar))
+        return monthlyBudget / days
     }
 
     private let client: OpenRouterClient
@@ -36,6 +49,10 @@ public final class SpendEngine: ObservableObject {
         self.client = client
         self.keyResolver = keyResolver
         self.isKeyConfigured = keyResolver.resolveKey() != nil
+        if let configuredBudget = keyResolver.resolveBudgetTarget(), configuredBudget > 0 {
+            self.monthlyBudget = configuredBudget
+        }
+        self.inputBudget = String(format: "%.2f", self.monthlyBudget)
         if let cached = client.loadCachedModelCatalog() {
             self.modelCatalog = cached
         }
@@ -91,6 +108,12 @@ public final class SpendEngine: ObservableObject {
 
         let resolvedKey = keyResolver.resolveKey()
         isKeyConfigured = resolvedKey != nil
+        if let configuredBudget = keyResolver.resolveBudgetTarget(), configuredBudget > 0 {
+            self.monthlyBudget = configuredBudget
+            if !isEditingKey {
+                self.inputBudget = String(format: "%.2f", configuredBudget)
+            }
+        }
 
         guard isKeyConfigured else {
             isLoading = false
@@ -161,14 +184,32 @@ public final class SpendEngine: ObservableObject {
         }
     }
 
-    public func calculateStatus(for spend: Double) -> SpendingStatus {
-        if spend < 0.80 {
-            return .normal
-        } else if spend <= 1.50 {
+    public func calculateStatus(for spend: Double, dailyRate: Double? = nil) -> SpendingStatus {
+        let rate = dailyRate ?? dailyBudget
+        guard rate > 0 else {
+            return spend > 0 ? .alert : .normal
+        }
+        if spend > rate * 3.0 {
+            return .alert
+        } else if spend > rate * 1.0 {
             return .warning
         } else {
-            return .alert
+            return .normal
         }
+    }
+
+    @discardableResult
+    public func saveBudget(_ text: String) -> Bool {
+        let cleaned = text.trimmingCharacters(in: CharacterSet(charactersIn: "$ ").union(.whitespacesAndNewlines))
+        guard let value = Double(cleaned), value > 0 else {
+            self.budgetErrorMessage = "Enter a valid budget amount (> $0)"
+            return false
+        }
+        self.budgetErrorMessage = nil
+        self.monthlyBudget = value
+        self.inputBudget = String(format: "%.2f", value)
+        self.status = calculateStatus(for: todaySpend)
+        return keyResolver.saveBudgetTarget(value)
     }
 
     public func saveKey(_ key: String) async -> Bool {

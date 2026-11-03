@@ -239,6 +239,8 @@ public struct SpendMenuView: View {
                 Spacer()
 
                 Button(action: {
+                    engine.inputBudget = String(format: "%.2f", engine.monthlyBudget)
+                    engine.budgetErrorMessage = nil
                     engine.isEditingKey = true
                 }) {
                     Label("Settings", systemImage: "gearshape")
@@ -275,10 +277,58 @@ public struct SpendMenuView: View {
                 }
             }
 
+            budgetCard
             startupCard
             keyCard
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var budgetCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Monthly Budget Target", systemImage: "target")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("$\(String(format: "%.2f", engine.dailyBudget))/day")
+                    .font(.caption2.weight(.medium))
+                    .foregroundColor(.secondary)
+                    .monospacedDigit()
+            }
+
+            Text("Set your monthly spend limit. Pacing warnings (🟡 >1.0×) and alerts (🔴 >3.0×) adjust automatically to days in the month.")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 6) {
+                Text("$")
+                    .foregroundColor(.secondary)
+                    .font(.callout.weight(.medium))
+
+                TextField("25.00", text: $engine.inputBudget)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit {
+                        engine.saveBudget(engine.inputBudget)
+                    }
+
+                Button("Save Budget") {
+                    engine.saveBudget(engine.inputBudget)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(engine.inputBudget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            if let error = engine.budgetErrorMessage {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundColor(.red)
+            }
+        }
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     @ViewBuilder
