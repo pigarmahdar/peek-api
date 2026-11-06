@@ -12,6 +12,7 @@ public final class SpendEngine: ObservableObject {
     @Published public var lastUpdated: Date?
     @Published public var errorMessage: String?
     @Published public var isKeyConfigured: Bool = false
+    @Published public var connectionState: ConnectionState = .offline
     @Published public var inputKey: String = ""
     @Published public var isEditingKey: Bool = false
     @Published public var hoveredModelId: String? = nil
@@ -49,6 +50,7 @@ public final class SpendEngine: ObservableObject {
         self.client = client
         self.keyResolver = keyResolver
         self.isKeyConfigured = keyResolver.resolveKey() != nil
+        self.connectionState = self.isKeyConfigured ? .offline : .unauthorized
         if let configuredBudget = keyResolver.resolveBudgetTarget(), configuredBudget > 0 {
             self.monthlyBudget = configuredBudget
         }
@@ -67,10 +69,58 @@ public final class SpendEngine: ObservableObject {
         if !isKeyConfigured {
             return "⚡ Setup Key"
         }
-        if isLoading && lastUpdated == nil {
+        if connectionState == .unauthorized {
+            return "⚡ Key Error"
+        }
+        if connectionState == .syncing && lastUpdated == nil {
             return "⚡ Loading..."
         }
+        if connectionState == .offline {
+            if lastUpdated != nil {
+                return "⚡ $\(String(format: "%.2f", todaySpend)) today ⚠️"
+            } else {
+                return "⚡ Offline"
+            }
+        }
         return "⚡ $\(String(format: "%.2f", todaySpend)) today"
+    }
+
+    public static func relativeTimeString(from date: Date, to now: Date = Date()) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        if seconds < 60 {
+            return "just now"
+        }
+        let minutes = seconds / 60
+        if minutes < 60 {
+            return "\(minutes)m ago"
+        }
+        let hours = minutes / 60
+        if hours < 24 {
+            return "\(hours)h ago"
+        }
+        let days = hours / 24
+        return "\(days)d ago"
+    }
+
+    public func footerStatusText(relativeTo now: Date = Date()) -> String {
+        switch connectionState {
+        case .syncing:
+            return "Syncing..."
+        case .unauthorized:
+            return isKeyConfigured ? "Invalid Management Key" : "No Management Key"
+        case .offline:
+            if let last = lastUpdated {
+                return "Offline · Synced \(Self.relativeTimeString(from: last, to: now))"
+            } else {
+                return "Offline"
+            }
+        case .active:
+            if let last = lastUpdated {
+                return "Synced \(Self.relativeTimeString(from: last, to: now))"
+            } else {
+                return "Active"
+            }
+        }
     }
 
     public var monthPercentage: Int {
@@ -118,9 +168,12 @@ public final class SpendEngine: ObservableObject {
         guard isKeyConfigured else {
             isLoading = false
             isRefreshing = false
+            connectionState = .unauthorized
             errorMessage = OpenRouterError.missingKey.localizedDescription
             return
         }
+
+        connectionState = .syncing
 
         do {
             async let creditsTask = client.fetchCredits()
@@ -135,6 +188,7 @@ public final class SpendEngine: ObservableObject {
             self.status = calculateStatus(for: activity.todaySpend)
             self.lastUpdated = Date()
             self.errorMessage = nil
+            self.connectionState = .active
 
             // Refresh model catalog in background if not loaded or cache needs update
             Task { [weak self] in
@@ -143,10 +197,13 @@ public final class SpendEngine: ObservableObject {
         } catch let error as OpenRouterError {
             self.errorMessage = error.localizedDescription
             if error == .missingKey || error == .unauthorized {
-                self.isKeyConfigured = false
+                self.connectionState = .unauthorized
+            } else {
+                self.connectionState = .offline
             }
         } catch {
             self.errorMessage = error.localizedDescription
+            self.connectionState = .offline
         }
 
         isLoading = false

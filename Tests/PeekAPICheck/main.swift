@@ -131,6 +131,7 @@ func testSpendEngineThresholds() {
     assert(engine.menuBarTitle == "⚡ Setup Key", "menuBarTitle unconfigured mismatch")
 
     engine.isKeyConfigured = true
+    engine.connectionState = .active
     engine.todaySpend = 0.46
     assert(engine.menuBarTitle == "⚡ $0.46 today", "menuBarTitle formatted mismatch")
 
@@ -465,6 +466,67 @@ func testModelPricingDecodingAndTooltip() throws {
     print("  ✅ Model pricing decoding (string/float), per-million math, tooltip & disk cache checks passed")
 }
 
+@MainActor
+func testConnectionHealthStates() {
+    let tempConfig = FileManager.default.temporaryDirectory.appendingPathComponent("peek_health_test_\(UUID().uuidString).json")
+    defer { try? FileManager.default.removeItem(at: tempConfig) }
+    let resolver = KeyResolver(configFileURL: tempConfig)
+    let engine = SpendEngine(keyResolver: resolver)
+
+    let now = Date(timeIntervalSince1970: 1792472400)
+
+    // 1. Unconfigured state
+    assert(!engine.isKeyConfigured, "Initial isKeyConfigured should be false without key")
+    assert(engine.connectionState == .unauthorized, "Initial state without key should be unauthorized")
+    assert(engine.menuBarTitle == "⚡ Setup Key", "menuBarTitle should prompt Setup Key")
+    assert(engine.footerStatusText(relativeTo: now) == "No Management Key", "footer status should indicate no key")
+
+    // 2. Unauthorized state with configured key
+    engine.isKeyConfigured = true
+    engine.connectionState = .unauthorized
+    assert(engine.menuBarTitle == "⚡ Key Error", "menuBarTitle should show Key Error on unauthorized")
+    assert(engine.footerStatusText(relativeTo: now) == "Invalid Management Key", "footer status should indicate invalid key")
+
+    // 3. Syncing state (initial vs subsequent)
+    engine.connectionState = .syncing
+    engine.lastUpdated = nil
+    assert(engine.menuBarTitle == "⚡ Loading...", "menuBarTitle should show Loading... on initial sync")
+    assert(engine.footerStatusText(relativeTo: now) == "Syncing...", "footer status should show Syncing...")
+
+    engine.lastUpdated = now.addingTimeInterval(-60)
+    engine.todaySpend = 1.25
+    assert(engine.menuBarTitle == "⚡ $1.25 today", "menuBarTitle should preserve spend during subsequent sync")
+
+    // 4. Active state with relative time formatting
+    engine.connectionState = .active
+    assert(engine.menuBarTitle == "⚡ $1.25 today", "menuBarTitle active mismatch")
+    assert(engine.footerStatusText(relativeTo: now) == "Synced 1m ago", "footer status relative time mismatch")
+
+    let thirtySecAgo = now.addingTimeInterval(-30)
+    engine.lastUpdated = thirtySecAgo
+    assert(engine.footerStatusText(relativeTo: now) == "Synced just now", "footer status 'just now' mismatch")
+
+    let twoHoursAgo = now.addingTimeInterval(-7200)
+    engine.lastUpdated = twoHoursAgo
+    assert(engine.footerStatusText(relativeTo: now) == "Synced 2h ago", "footer status '2h ago' mismatch")
+
+    let oneDayAgo = now.addingTimeInterval(-86400)
+    engine.lastUpdated = oneDayAgo
+    assert(engine.footerStatusText(relativeTo: now) == "Synced 1d ago", "footer status '1d ago' mismatch")
+
+    // 5. Offline state (with and without cached data)
+    engine.connectionState = .offline
+    engine.lastUpdated = nil
+    assert(engine.menuBarTitle == "⚡ Offline", "menuBarTitle offline without cached data mismatch")
+    assert(engine.footerStatusText(relativeTo: now) == "Offline", "footer status offline without cached data mismatch")
+
+    engine.lastUpdated = now.addingTimeInterval(-300)
+    assert(engine.menuBarTitle == "⚡ $1.25 today ⚠️", "menuBarTitle offline with cached data mismatch")
+    assert(engine.footerStatusText(relativeTo: now) == "Offline · Synced 5m ago", "footer status offline with cached data mismatch")
+
+    print("  ✅ Connection & Authentication Health States (active, syncing, unauthorized, offline) passed")
+}
+
 // MARK: - Main Test Runner
 @main
 struct PeekCheckRunner {
@@ -475,12 +537,13 @@ struct PeekCheckRunner {
             testActivityProcessingAndGrouping()
             testModelCleanNames()
             testSpendEngineThresholds()
+            testConnectionHealthStates()
             try testKeyResolverCommandAndConfig()
             try testRealtimeAnalyticsProcessingAndMerging()
             try testRealtimeSnapshotAndDateFormatAlignment()
             testLaunchAtLoginManager()
             try testModelPricingDecodingAndTooltip()
-            print("\n🎉 ALL CHECKS PASSED (9/9 suites)")
+            print("\n🎉 ALL CHECKS PASSED (10/10 suites)")
         } catch {
             print("❌ Check failed with error: \(error)")
             exit(1)

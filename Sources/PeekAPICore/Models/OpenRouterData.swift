@@ -318,6 +318,13 @@ public enum SpendingStatus: Equatable {
     }
 }
 
+public enum ConnectionState: String, Equatable, Sendable {
+    case active
+    case syncing
+    case unauthorized
+    case offline
+}
+
 public extension Dictionary where Key == String, Value == ModelPricing {
     func lookupPricing(for modelId: String) -> ModelPricing? {
         if let direct = self[modelId] {

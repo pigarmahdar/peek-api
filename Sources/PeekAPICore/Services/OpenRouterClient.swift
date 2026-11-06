@@ -119,6 +119,8 @@ public final class OpenRouterClient: Sendable {
                 timeZone: timeZone,
                 modelPricing: modelPricing
             )
+        } catch let error as OpenRouterError where error == .unauthorized || error == .missingKey {
+            throw error
         } catch {
             // Fallback to historical activity endpoint
             let historicalItems = try await fetchHistoricalActivity(key: key)

@@ -19,9 +19,18 @@ public struct SpendMenuView: View {
         }
     }
 
+    private var connectionStatusColor: Color {
+        switch engine.connectionState {
+        case .active: return .green
+        case .syncing: return .blue
+        case .offline: return .orange
+        case .unauthorized: return .red
+        }
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if !engine.isKeyConfigured || engine.isEditingKey {
+            if !engine.isKeyConfigured || engine.isEditingKey || engine.connectionState == .unauthorized {
                 settingsSection
             } else {
                 burnHeaderSection
@@ -29,7 +38,7 @@ public struct SpendMenuView: View {
                 walletSection
             }
 
-            if let error = engine.errorMessage, engine.isKeyConfigured && !engine.isEditingKey {
+            if let error = engine.errorMessage, engine.isKeyConfigured && !engine.isEditingKey && engine.connectionState == .offline && engine.lastUpdated == nil {
                 Text(error)
                     .font(.caption)
                     .foregroundColor(.red)
@@ -214,49 +223,74 @@ public struct SpendMenuView: View {
 
     @ViewBuilder
     private var actionsFooterSection: some View {
-        HStack {
-            if !engine.isEditingKey && engine.isKeyConfigured {
-                Button(action: {
-                    Task {
-                        await engine.refresh()
-                    }
-                }) {
-                    Label("Refresh", systemImage: "arrow.clockwise")
+        VStack(spacing: 8) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(connectionStatusColor)
+                    .frame(width: 6, height: 6)
+                TimelineView(.periodic(from: .now, by: 15)) { context in
+                    Text(engine.footerStatusText(relativeTo: context.date))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
-                .buttonStyle(.borderless)
-
-                Spacer()
-
-                Button(action: {
-                    if let url = URL(string: "https://openrouter.ai/activity/explore?metric=total_usage&granularity=day&date_preset=month_to_date") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }) {
-                    Label("Dashboard", systemImage: "globe")
-                }
-                .buttonStyle(.borderless)
-
-                Spacer()
-
-                Button(action: {
-                    engine.inputBudget = String(format: "%.2f", engine.monthlyBudget)
-                    engine.budgetErrorMessage = nil
-                    engine.isEditingKey = true
-                }) {
-                    Label("Settings", systemImage: "gearshape")
-                }
-                .buttonStyle(.borderless)
-
                 Spacer()
             }
 
-            Button(action: {
-                NSApplication.shared.terminate(nil)
-            }) {
-                Text("Quit")
-                    .foregroundColor(.secondary)
+            HStack {
+                if !engine.isEditingKey && engine.isKeyConfigured && engine.connectionState != .unauthorized {
+                    Button(action: {
+                        Task {
+                            await engine.refresh()
+                        }
+                    }) {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+
+                    Spacer()
+
+                    Button(action: {
+                        if let url = URL(string: "https://openrouter.ai/activity/explore?metric=total_usage&granularity=day&date_preset=month_to_date") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }) {
+                        Label("Dashboard", systemImage: "globe")
+                    }
+                    .buttonStyle(.borderless)
+
+                    Spacer()
+
+                    Button(action: {
+                        engine.inputBudget = String(format: "%.2f", engine.monthlyBudget)
+                        engine.budgetErrorMessage = nil
+                        engine.isEditingKey = true
+                    }) {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .buttonStyle(.borderless)
+
+                    Spacer()
+                } else if engine.isKeyConfigured && engine.connectionState == .unauthorized {
+                    Button(action: {
+                        Task {
+                            await engine.refresh()
+                        }
+                    }) {
+                        Label("Retry", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+
+                    Spacer()
+                }
+
+                Button(action: {
+                    NSApplication.shared.terminate(nil)
+                }) {
+                    Text("Quit")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.borderless)
             }
-            .buttonStyle(.borderless)
         }
         .font(.caption)
     }
@@ -268,7 +302,7 @@ public struct SpendMenuView: View {
                 Label("Settings", systemImage: "gearshape.fill")
                     .font(.headline)
                 Spacer()
-                if engine.isEditingKey && engine.isKeyConfigured {
+                if engine.isEditingKey && engine.isKeyConfigured && engine.connectionState != .unauthorized {
                     Button("Done") {
                         engine.isEditingKey = false
                     }
@@ -391,6 +425,20 @@ public struct SpendMenuView: View {
             Text("Paste your OpenRouter Management Key (`sk-or-v1-...`) to track real-time inference burn.")
                 .font(.caption2)
                 .foregroundColor(.secondary)
+
+            if engine.connectionState == .unauthorized {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.red)
+                        .font(.caption)
+                    Text(engine.isKeyConfigured ? "Authentication failed (401/403). Ensure you are using an OpenRouter Management Key." : "No Management Key configured.")
+                        .font(.caption2)
+                        .foregroundColor(.red)
+                }
+                .padding(6)
+                .background(Color.red.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
 
             SecureField("sk-or-v1-...", text: $engine.inputKey)
                 .textFieldStyle(.roundedBorder)
