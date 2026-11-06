@@ -447,7 +447,7 @@ public final class OpenRouterClient: Sendable {
         }
     }
 
-    public func loadCachedModelCatalog(maxAge: TimeInterval = 6 * 3600) -> [String: ModelCatalogItem]? {
+    public func loadCachedModelCatalog(maxAge: TimeInterval = 1 * 3600) -> [String: ModelCatalogItem]? {
         let url = cacheFileURL
         guard FileManager.default.fileExists(atPath: url.path),
               let data = try? Data(contentsOf: url),

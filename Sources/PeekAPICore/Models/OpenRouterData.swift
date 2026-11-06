@@ -183,16 +183,30 @@ public struct AnalyticsQueryItem: Codable, Equatable {
     }
 }
 
-public struct ModelPricing: Codable, Equatable, Sendable {
-    public let prompt: Double
-    public let completion: Double
+public struct PricingOverride: Codable, Equatable, Sendable {
+    public let utcDays: [String]?
+    public let utcStart: Int?
+    public let utcEnd: Int?
+    public let minPromptTokens: Int?
+    public let prompt: Double?
+    public let completion: Double?
     public let request: Double?
     public let image: Double?
 
-    public var promptPerMillion: Double { prompt * 1_000_000 }
-    public var completionPerMillion: Double { completion * 1_000_000 }
-
-    public init(prompt: Double, completion: Double, request: Double? = nil, image: Double? = nil) {
+    public init(
+        utcDays: [String]? = nil,
+        utcStart: Int? = nil,
+        utcEnd: Int? = nil,
+        minPromptTokens: Int? = nil,
+        prompt: Double? = nil,
+        completion: Double? = nil,
+        request: Double? = nil,
+        image: Double? = nil
+    ) {
+        self.utcDays = utcDays
+        self.utcStart = utcStart
+        self.utcEnd = utcEnd
+        self.minPromptTokens = minPromptTokens
         self.prompt = prompt
         self.completion = completion
         self.request = request
@@ -200,13 +214,21 @@ public struct ModelPricing: Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case utcDays = "utc_days"
+        case utcStart = "utc_start"
+        case utcEnd = "utc_end"
+        case minPromptTokens = "min_prompt_tokens"
         case prompt, completion, request, image
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.prompt = Self.decodeFlexibleDouble(container, key: .prompt) ?? 0.0
-        self.completion = Self.decodeFlexibleDouble(container, key: .completion) ?? 0.0
+        self.utcDays = try? container.decodeIfPresent([String].self, forKey: .utcDays)
+        self.utcStart = Self.decodeFlexibleInt(container, key: .utcStart)
+        self.utcEnd = Self.decodeFlexibleInt(container, key: .utcEnd)
+        self.minPromptTokens = Self.decodeFlexibleInt(container, key: .minPromptTokens)
+        self.prompt = Self.decodeFlexibleDouble(container, key: .prompt)
+        self.completion = Self.decodeFlexibleDouble(container, key: .completion)
         self.request = Self.decodeFlexibleDouble(container, key: .request)
         self.image = Self.decodeFlexibleDouble(container, key: .image)
     }
@@ -219,6 +241,134 @@ public struct ModelPricing: Codable, Equatable, Sendable {
             return d
         }
         return nil
+    }
+
+    private static func decodeFlexibleInt(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Int? {
+        if let i = try? container.decode(Int.self, forKey: key) {
+            return i
+        }
+        if let s = try? container.decode(String.self, forKey: key), let i = Int(s) {
+            return i
+        }
+        return nil
+    }
+}
+
+public struct ModelPricing: Codable, Equatable, Sendable {
+    public let prompt: Double
+    public let completion: Double
+    public let request: Double?
+    public let image: Double?
+    public let overrides: [PricingOverride]?
+
+    public var promptPerMillion: Double { effectivePromptPerMillion() }
+    public var completionPerMillion: Double { effectiveCompletionPerMillion() }
+
+    public init(
+        prompt: Double,
+        completion: Double,
+        request: Double? = nil,
+        image: Double? = nil,
+        overrides: [PricingOverride]? = nil
+    ) {
+        self.prompt = prompt
+        self.completion = completion
+        self.request = request
+        self.image = image
+        self.overrides = overrides
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case prompt, completion, request, image, overrides
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.prompt = Self.decodeFlexibleDouble(container, key: .prompt) ?? 0.0
+        self.completion = Self.decodeFlexibleDouble(container, key: .completion) ?? 0.0
+        self.request = Self.decodeFlexibleDouble(container, key: .request)
+        self.image = Self.decodeFlexibleDouble(container, key: .image)
+        self.overrides = try? container.decodeIfPresent([PricingOverride].self, forKey: .overrides)
+    }
+
+    private static func decodeFlexibleDouble(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Double? {
+        if let d = try? container.decode(Double.self, forKey: key) {
+            return d
+        }
+        if let s = try? container.decode(String.self, forKey: key), let d = Double(s) {
+            return d
+        }
+        return nil
+    }
+
+    public func effectiveRates(at date: Date = Date()) -> (prompt: Double, completion: Double) {
+        guard let overrides = overrides, !overrides.isEmpty else {
+            return (prompt, completion)
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        guard let utc = TimeZone(secondsFromGMT: 0) else {
+            return (prompt, completion)
+        }
+        calendar.timeZone = utc
+
+        let weekdayIndex = calendar.component(.weekday, from: date) - 1 // 0 = Sunday
+        let dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+        let currentDay = dayNames[max(0, min(6, weekdayIndex))]
+        let hour = calendar.component(.hour, from: date)
+        let minute = calendar.component(.minute, from: date)
+        let currentTime = hour * 100 + minute
+
+        for override in overrides {
+            if override.minPromptTokens != nil {
+                continue
+            }
+
+            if let days = override.utcDays, !days.isEmpty {
+                let normalized = days.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+                if !normalized.contains(currentDay) {
+                    continue
+                }
+            }
+
+            if override.utcStart != nil || override.utcEnd != nil {
+                let start = override.utcStart ?? 0
+                let rawEnd = override.utcEnd ?? 0
+                let end = rawEnd == 0 ? 2400 : rawEnd
+
+                if start < end {
+                    guard currentTime >= start && currentTime < end else {
+                        continue
+                    }
+                } else if start > end {
+                    guard currentTime >= start || currentTime < end else {
+                        continue
+                    }
+                }
+            }
+
+            if override.prompt != nil || override.completion != nil {
+                return (override.prompt ?? prompt, override.completion ?? completion)
+            }
+        }
+
+        return (prompt, completion)
+    }
+
+    public func effectivePrompt(at date: Date = Date()) -> Double {
+        effectiveRates(at: date).prompt
+    }
+
+    public func effectiveCompletion(at date: Date = Date()) -> Double {
+        effectiveRates(at: date).completion
+    }
+
+    public func effectivePromptPerMillion(at date: Date = Date()) -> Double {
+        effectivePrompt(at: date) * 1_000_000
+    }
+
+    public func effectiveCompletionPerMillion(at date: Date = Date()) -> Double {
+        effectiveCompletion(at: date) * 1_000_000
     }
 }
 
@@ -275,12 +425,16 @@ public struct ModelSpendSummary: Identifiable, Equatable, Sendable {
     }
 
     public var pricingTooltip: String {
+        pricingTooltip(at: Date())
+    }
+
+    public func pricingTooltip(at date: Date = Date()) -> String {
         guard let pricing = pricing else {
             return "Pricing unavailable"
         }
         return """
-        Input:  $\(String(format: "%.2f", pricing.promptPerMillion)) / 1M tokens
-        Output: $\(String(format: "%.2f", pricing.completionPerMillion)) / 1M tokens
+        Input:  $\(String(format: "%.2f", pricing.effectivePromptPerMillion(at: date))) / 1M tokens
+        Output: $\(String(format: "%.2f", pricing.effectiveCompletionPerMillion(at: date))) / 1M tokens
         """
     }
 

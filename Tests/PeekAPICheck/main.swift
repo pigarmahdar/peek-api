@@ -463,7 +463,89 @@ func testModelPricingDecodingAndTooltip() throws {
     assert(catalogMap.lookupItem(for: "deepseek/deepseek-chat-20261017")?.id == "deepseek/deepseek-chat", "Date slug item lookup mismatch")
     assert(pricingMap.lookupPricing(for: "anthropic/claude-3.5-sonnet-20260922")?.promptPerMillion == 3.00, "Date slug pricing lookup mismatch")
 
-    print("  ✅ Model pricing decoding (string/float), per-million math, tooltip & disk cache checks passed")
+    // Verify dynamic pricing overrides (peak vs off-peak time of day)
+    let overridesJSON = """
+    {
+        "prompt": "0.00000015",
+        "completion": "0.0000006",
+        "overrides": [
+            {
+                "utc_days": ["saturday", "sunday"],
+                "prompt": "0.00000015",
+                "completion": "0.0000006"
+            },
+            {
+                "utc_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+                "utc_start": 600,
+                "utc_end": 1000,
+                "prompt": "0.0000003",
+                "completion": "0.0000012"
+            },
+            {
+                "utc_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+                "utc_start": 1000,
+                "utc_end": 0,
+                "prompt": "0.00000015",
+                "completion": "0.0000006"
+            },
+            {
+                "min_prompt_tokens": 32000,
+                "prompt": "0.000001",
+                "completion": "0.000005"
+            }
+        ]
+    }
+    """.data(using: .utf8)!
+
+    let dynamicPricing = try JSONDecoder().decode(ModelPricing.self, from: overridesJSON)
+    assert(dynamicPricing.overrides?.count == 4, "Overrides count mismatch")
+
+    var utcCalendar = Calendar(identifier: .gregorian)
+    utcCalendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+    // Test Wednesday 08:30 UTC -> Peak ($0.30 / $1.20)
+    let wednesdayPeak = utcCalendar.date(from: DateComponents(year: 2026, month: 11, day: 4, hour: 8, minute: 30))!
+    assert(abs(dynamicPricing.effectivePromptPerMillion(at: wednesdayPeak) - 0.30) < 0.001, "Wednesday peak prompt rate mismatch")
+    assert(abs(dynamicPricing.effectiveCompletionPerMillion(at: wednesdayPeak) - 1.20) < 0.001, "Wednesday peak completion rate mismatch")
+
+    // Test Wednesday 13:30 UTC -> Off-Peak ($0.15 / $0.60)
+    let wednesdayOffPeak = utcCalendar.date(from: DateComponents(year: 2026, month: 11, day: 4, hour: 13, minute: 30))!
+    assert(abs(dynamicPricing.effectivePromptPerMillion(at: wednesdayOffPeak) - 0.15) < 0.001, "Wednesday off-peak prompt rate mismatch")
+    assert(abs(dynamicPricing.effectiveCompletionPerMillion(at: wednesdayOffPeak) - 0.60) < 0.001, "Wednesday off-peak completion rate mismatch")
+
+    // Test Sunday 12:00 UTC -> Weekend ($0.15 / $0.60)
+    let sundayOffPeak = utcCalendar.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 12, minute: 0))!
+    assert(abs(dynamicPricing.effectivePromptPerMillion(at: sundayOffPeak) - 0.15) < 0.001, "Sunday prompt rate mismatch")
+    assert(abs(dynamicPricing.effectiveCompletionPerMillion(at: sundayOffPeak) - 0.60) < 0.001, "Sunday completion rate mismatch")
+
+    // Test midnight wrap-around (e.g. 1500 to 0100)
+    let midnightWrapPricing = ModelPricing(
+        prompt: 0.00000015,
+        completion: 0.0000006,
+        overrides: [
+            PricingOverride(utcStart: 1500, utcEnd: 100, prompt: 0.000000075, completion: 0.0000003)
+        ]
+    )
+    let nightTime = utcCalendar.date(from: DateComponents(year: 2026, month: 11, day: 4, hour: 18, minute: 0))!
+    assert(abs(midnightWrapPricing.effectivePromptPerMillion(at: nightTime) - 0.075) < 0.001, "Midnight wrap 18:00 rate mismatch")
+    let earlyMorning = utcCalendar.date(from: DateComponents(year: 2026, month: 11, day: 4, hour: 0, minute: 30))!
+    assert(abs(midnightWrapPricing.effectivePromptPerMillion(at: earlyMorning) - 0.075) < 0.001, "Midnight wrap 00:30 rate mismatch")
+    let dayTime = utcCalendar.date(from: DateComponents(year: 2026, month: 11, day: 4, hour: 10, minute: 0))!
+    assert(abs(midnightWrapPricing.effectivePromptPerMillion(at: dayTime) - 0.15) < 0.001, "Midnight wrap daytime fallback mismatch")
+
+    // Tooltip with dynamic pricing
+    let dynamicSummary = ModelSpendSummary(
+        rawModelId: "deepseek/deepseek-v4.1-flash",
+        displayName: "DeepSeek V4.1 Flash",
+        cost: 0.02,
+        percentage: 4.0,
+        isBYOK: true,
+        pricing: dynamicPricing
+    )
+    assert(dynamicSummary.pricingTooltip(at: wednesdayPeak).contains("$0.30"), "Peak tooltip should show $0.30")
+    assert(dynamicSummary.pricingTooltip(at: wednesdayOffPeak).contains("$0.15"), "Off-peak tooltip should show $0.15")
+
+    print("  ✅ Model pricing decoding (string/float), dynamic overrides (peak/off-peak), per-million math, tooltip & disk cache checks passed")
 }
 
 @MainActor
