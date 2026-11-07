@@ -20,6 +20,7 @@ Running autonomous harnesses, multi-agent workflows, or coding assistants (Curso
 * **Local Timezone Aware:** Aligns spend boundaries with your machine's local calendar day (e.g. SGT / GMT+8) instead of forcing UTC midnight cuts.
 * **Unified Cost (BYOK & Wallet):** Tracks both OpenRouter credit deductions (`⚡`) and direct upstream provider costs (`🔑` Google, DeepSeek, Xiaomi, Meta, etc.).
 * **Dynamic Model Pricing on Hover:** Instant glanceable aggregate input and output rates per 1M tokens when hovering over any top model in the popover.
+* **Spikeguard Runaway & Surge Protection:** Detects rapid inference burn velocity (> $0.75 in a sync interval) and overnight daemon storms upon waking from macOS sleep, alerting you with native notifications and menu bar flags (`⚠️`) before runaway loops drain capital.
 * **Dynamic Budget & Pacing:** Evaluates daily inference burn against a configurable monthly target (default $25/mo) with active calendar-month rate math (`Monthly Budget / Days in Month`):
   - 🟢 **On Track (≤ 1.0× Daily Rate):** Normal consumption within expected daily pacing.
   - 🟡 **Pacing Warning (> 1.0× Daily Rate):** Daily spend exceeding expected rate (borrowing against future days).
@@ -99,28 +100,31 @@ You can configure your monthly spending ceiling to match your personal or team a
   ```json
   {
     "key": "sk-or-v1-...",
-    "monthly_budget_target": 50.0
+    "monthly_budget_target": 25.0,
+    "spikeguard_threshold": 0.75
   }
   ```
 
 #### Pacing Thresholds
 Daily pacing rates dynamically adapt based on the number of days in the active calendar month (28, 29, 30, or 31):
-* **Target Daily Rate** = `Monthly Budget / Days in Month` (e.g., $50.00 / 30 = $1.67/day)
-* 🟡 **Pacing Warning:** Today's spend exceeds `1.0× Target Daily Rate` (>$1.67)
-* 🔴 **High Burn Alert:** Today's spend exceeds `3.0× Target Daily Rate` (>$5.00)
+* **Target Daily Rate** = `Monthly Budget / Days in Month` (e.g., $25.00 / 30 = $0.83/day)
+* 🟡 **Pacing Warning:** Today's spend exceeds `1.0× Target Daily Rate` (>$0.83)
+* 🔴 **High Burn Alert:** Today's spend exceeds `3.0× Target Daily Rate` (>$2.50)
+
+### 3. Spikeguard Runaway Protection
+
+Spikeguard actively monitors spend velocity to stop runaway loops (e.g. repeated tool-call failures or retry storms) before they drain capital:
+
+* **Real-time Velocity:** Compares spend between 5-minute sync intervals. If spend increases by $\ge \$0.75$, `peek-api` triggers a macOS notification banner, flags the culprit model, and changes the menu bar status to `⚠️ $X.XX today`.
+* **Wake-from-Sleep Delta Catch:** Hooks directly into macOS wake events (`didWakeNotification`) to audit spend incurred while your laptop was asleep or docked in DarkWake, immediately surfacing any overnight storms.
+* **Smart Cooldown & Rollover Safety:** Automatically suppresses repeat notifications for 30 minutes during intentional heavy batch runs, and cleanly skips midnight day rollovers.
+* **Custom Threshold:** Override the default `$0.75` trigger by setting `"spikeguard_threshold"` in `~/.config/peek-api/config.json`.
 
 ---
 
-## Architecture
+## Verification
 
-* **`Sources/PeekAPICore`**: Pure Swift library containing:
-  - `OpenRouterClient`: Networking layer for `credits` and real-time `analytics/query` endpoints with local timezone boundary calculation.
-  - `SpendEngine`: State manager with Combine-driven polling, pacing thresholds, and formatting.
-  - `KeyResolver`: Multi-tier secret resolver (Env -> `.env` -> CLI command -> config file).
-* **`Sources/PeekAPI`**: Native SwiftUI menu bar application using `MenuBarExtra`.
-* **`Tests/PeekAPICheck`**: Self-contained regression test suite verifying decoding, BYOK detection, threshold math, and timezone alignment.
-
-### Running Self-Checks
+Run the built-in self-check regression test suite:
 
 ```bash
 swift run peek-check

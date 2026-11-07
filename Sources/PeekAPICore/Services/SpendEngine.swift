@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+@preconcurrency import UserNotifications
 
 @MainActor
 public final class SpendEngine: ObservableObject {
@@ -17,6 +18,11 @@ public final class SpendEngine: ObservableObject {
     @Published public var isEditingKey: Bool = false
     @Published public var hoveredModelId: String? = nil
     @Published public private(set) var modelCatalog: [String: ModelCatalogItem] = [:]
+
+    // Spikeguard Pacing & Overnight Flags
+    @Published public var activeSpikeAlert: SpikeAlert? = nil
+    public var spikeguardThreshold: Double = 0.75
+    public var lastAlertDate: Date? = nil
 
     public var modelPricingMap: [String: ModelPricing] {
         modelCatalog.mapValues { $0.pricing }
@@ -54,6 +60,9 @@ public final class SpendEngine: ObservableObject {
         if let configuredBudget = keyResolver.resolveBudgetTarget(), configuredBudget > 0 {
             self.monthlyBudget = configuredBudget
         }
+        if let configuredThreshold = keyResolver.resolveSpikeguardThreshold(), configuredThreshold > 0 {
+            self.spikeguardThreshold = configuredThreshold
+        }
         self.inputBudget = String(format: "%.2f", self.monthlyBudget)
         if let cached = client.loadCachedModelCatalog() {
             self.modelCatalog = cached
@@ -74,6 +83,9 @@ public final class SpendEngine: ObservableObject {
         }
         if connectionState == .syncing && lastUpdated == nil {
             return "⚡ Loading..."
+        }
+        if let alert = activeSpikeAlert, Date().timeIntervalSince(alert.timestamp) < 1800 {
+            return "⚠️ $\(String(format: "%.2f", todaySpend)) today"
         }
         if connectionState == .offline {
             if lastUpdated != nil {
@@ -150,7 +162,7 @@ public final class SpendEngine: ObservableObject {
         pollingTimer = nil
     }
 
-    public func refresh() async {
+    public func refresh(isWakeup: Bool = false) async {
         guard !isRefreshing else { return }
         isRefreshing = true
         isLoading = true
@@ -163,6 +175,9 @@ public final class SpendEngine: ObservableObject {
             if !isEditingKey {
                 self.inputBudget = String(format: "%.2f", configuredBudget)
             }
+        }
+        if let configuredThreshold = keyResolver.resolveSpikeguardThreshold(), configuredThreshold > 0 {
+            self.spikeguardThreshold = configuredThreshold
         }
 
         guard isKeyConfigured else {
@@ -181,6 +196,9 @@ public final class SpendEngine: ObservableObject {
 
             let (credits, activity) = try await (creditsTask, activityTask)
 
+            let previousTodaySpend = self.todaySpend
+            let hadPreviousData = self.lastUpdated != nil
+
             self.walletBalance = credits.remainingBalance
             self.todaySpend = activity.todaySpend
             self.monthSpend = activity.monthToDateSpend
@@ -189,6 +207,10 @@ public final class SpendEngine: ObservableObject {
             self.lastUpdated = Date()
             self.errorMessage = nil
             self.connectionState = .active
+
+            if hadPreviousData {
+                evaluateSpikeguard(previousSpend: previousTodaySpend, currentSpend: activity.todaySpend, topModels: activity.topModelsToday, isWakeup: isWakeup)
+            }
 
             // Refresh model catalog in background if not loaded or cache needs update
             Task { [weak self] in
@@ -267,6 +289,55 @@ public final class SpendEngine: ObservableObject {
         self.inputBudget = String(format: "%.2f", value)
         self.status = calculateStatus(for: todaySpend)
         return keyResolver.saveBudgetTarget(value)
+    }
+
+    // MARK: - Spikeguard Surge Detection
+
+    public func evaluateSpikeguard(previousSpend: Double, currentSpend: Double, topModels: [ModelSpendSummary], isWakeup: Bool = false, now: Date = Date()) {
+        guard currentSpend >= previousSpend else { return }
+        let delta = currentSpend - previousSpend
+        guard delta >= spikeguardThreshold else { return }
+
+        // Cooldown: suppress alerts within 30m unless waking from sleep
+        if !isWakeup, let last = lastAlertDate, now.timeIntervalSince(last) < 1800 {
+            return
+        }
+
+        lastAlertDate = now
+        let topModelName = topModels.first?.displayName ?? "Unknown Model"
+        let alert = SpikeAlert(delta: delta, topModel: topModelName, timestamp: now, isOvernight: isWakeup)
+        self.activeSpikeAlert = alert
+        sendSpikeNotification(alert)
+    }
+
+    public func dismissSpikeAlert() {
+        self.activeSpikeAlert = nil
+    }
+
+    public func sendSpikeNotification(_ alert: SpikeAlert) {
+        let title = alert.isOvernight ? "⚠️ Spikeguard: Overnight Surge" : "⚠️ Spikeguard: Spend Spike Alert"
+        let formattedDelta = String(format: "$%.2f", alert.delta)
+        let body = "+\(formattedDelta) surge detected (Top: \(alert.topModel))"
+
+        if Bundle.main.bundleIdentifier != nil {
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            content.sound = .default
+            let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                if granted {
+                    UNUserNotificationCenter.current().add(request)
+                }
+            }
+        } else {
+            // Fallback for terminal/CLI binary execution
+            let script = "display notification \"\(body)\" with title \"\(title)\" sound name \"default\""
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", script]
+            try? process.run()
+        }
     }
 
     public func saveKey(_ key: String) async -> Bool {

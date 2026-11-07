@@ -479,6 +479,20 @@ public enum ConnectionState: String, Equatable, Sendable {
     case offline
 }
 
+public struct SpikeAlert: Equatable, Sendable {
+    public let delta: Double
+    public let topModel: String
+    public let timestamp: Date
+    public let isOvernight: Bool
+
+    public init(delta: Double, topModel: String, timestamp: Date = Date(), isOvernight: Bool = false) {
+        self.delta = delta
+        self.topModel = topModel
+        self.timestamp = timestamp
+        self.isOvernight = isOvernight
+    }
+}
+
 public extension Dictionary where Key == String, Value == ModelPricing {
     func lookupPricing(for modelId: String) -> ModelPricing? {
         if let direct = self[modelId] {

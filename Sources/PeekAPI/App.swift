@@ -28,6 +28,11 @@ struct PeekAPIApp: App {
                     engine.startPolling()
                     launchManager.refreshStatus()
                 }
+                .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)) { _ in
+                    Task {
+                        await engine.refresh(isWakeup: true)
+                    }
+                }
         } label: {
             Text(engine.menuBarTitle)
         }

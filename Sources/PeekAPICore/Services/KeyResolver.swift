@@ -83,6 +83,17 @@ public final class KeyResolver: @unchecked Sendable {
         }
     }
 
+    public func resolveSpikeguardThreshold() -> Double? {
+        loadConfigFile()?.spikeguardThreshold
+    }
+
+    public func saveSpikeguardThreshold(_ threshold: Double) -> Bool {
+        guard threshold > 0 else { return false }
+        return updateConfigFile { config in
+            config.spikeguardThreshold = threshold
+        }
+    }
+
     // MARK: - .env File Resolver
 
     public func resolveFromDotEnv(directory: String = FileManager.default.currentDirectoryPath) -> String? {
@@ -124,17 +135,20 @@ public final class KeyResolver: @unchecked Sendable {
         public var key: String?
         public var keyCommand: String?
         public var monthlyBudgetTarget: Double?
+        public var spikeguardThreshold: Double?
 
-        public init(key: String? = nil, keyCommand: String? = nil, monthlyBudgetTarget: Double? = nil) {
+        public init(key: String? = nil, keyCommand: String? = nil, monthlyBudgetTarget: Double? = nil, spikeguardThreshold: Double? = nil) {
             self.key = key
             self.keyCommand = keyCommand
             self.monthlyBudgetTarget = monthlyBudgetTarget
+            self.spikeguardThreshold = spikeguardThreshold
         }
 
         enum CodingKeys: String, CodingKey {
             case key
             case keyCommand = "key_command"
             case monthlyBudgetTarget = "monthly_budget_target"
+            case spikeguardThreshold = "spikeguard_threshold"
         }
 
         public init(from decoder: Decoder) throws {
@@ -148,6 +162,14 @@ public final class KeyResolver: @unchecked Sendable {
                 self.monthlyBudgetTarget = parsed
             } else {
                 self.monthlyBudgetTarget = nil
+            }
+            if let doubleVal = try? container.decodeIfPresent(Double.self, forKey: .spikeguardThreshold) {
+                self.spikeguardThreshold = doubleVal
+            } else if let stringVal = try? container.decodeIfPresent(String.self, forKey: .spikeguardThreshold),
+                      let parsed = Double(stringVal.trimmingCharacters(in: CharacterSet(charactersIn: "$ ").union(.whitespacesAndNewlines))) {
+                self.spikeguardThreshold = parsed
+            } else {
+                self.spikeguardThreshold = nil
             }
         }
     }

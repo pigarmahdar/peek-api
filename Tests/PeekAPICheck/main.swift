@@ -609,6 +609,46 @@ func testConnectionHealthStates() {
     print("  ✅ Connection & Authentication Health States (active, syncing, unauthorized, offline) passed")
 }
 
+@MainActor
+func testSpikeguardDetection() {
+    let engine = SpendEngine()
+    engine.spikeguardThreshold = 0.75
+    let models = [ModelSpendSummary(rawModelId: "xiaomi/mimo-v2.6-flash", displayName: "MiMo V2.6-flash", cost: 1.20, percentage: 80.0, isBYOK: true)]
+    let now = Date()
+
+    // 1. Normal incremental spend under threshold: no alert
+    engine.evaluateSpikeguard(previousSpend: 0.10, currentSpend: 0.30, topModels: models, isWakeup: false, now: now)
+    assert(engine.activeSpikeAlert == nil, "Spike alert should not trigger under threshold")
+
+    // 2. Spend surge >= $0.75: triggers alert with correct delta, model, and status
+    engine.evaluateSpikeguard(previousSpend: 0.30, currentSpend: 1.25, topModels: models, isWakeup: false, now: now)
+    assert(engine.activeSpikeAlert != nil, "Spike alert should trigger for +$0.95 delta")
+    assert(abs(engine.activeSpikeAlert!.delta - 0.95) < 0.001, "Delta should match 0.95")
+    assert(engine.activeSpikeAlert!.topModel == "MiMo V2.6-flash", "Top model mismatch")
+    assert(!engine.activeSpikeAlert!.isOvernight, "Should not be flagged as overnight")
+    assert(engine.menuBarTitle.hasPrefix("⚠️"), "Menu bar title should reflect active spike alert")
+
+    // 3. Cooldown: second surge within 30m is suppressed
+    engine.evaluateSpikeguard(previousSpend: 1.25, currentSpend: 2.20, topModels: models, isWakeup: false, now: now.addingTimeInterval(300))
+    assert(abs(engine.activeSpikeAlert!.delta - 0.95) < 0.001, "Alert should not have updated during cooldown")
+
+    // 4. Wakeup: overnight surge bypasses cooldown and marks isOvernight = true
+    engine.evaluateSpikeguard(previousSpend: 2.20, currentSpend: 3.50, topModels: models, isWakeup: true, now: now.addingTimeInterval(600))
+    assert(engine.activeSpikeAlert != nil, "Wakeup surge should fire")
+    assert(abs(engine.activeSpikeAlert!.delta - 1.30) < 0.001, "Wakeup delta should be 1.30")
+    assert(engine.activeSpikeAlert!.isOvernight, "Wakeup surge must be flagged isOvernight")
+
+    // 5. Midnight rollover: spend reset does not trigger false alert
+    engine.evaluateSpikeguard(previousSpend: 3.50, currentSpend: 0.05, topModels: models, isWakeup: false, now: now.addingTimeInterval(3600))
+    assert(abs(engine.activeSpikeAlert!.delta - 1.30) < 0.001, "Midnight reset should not trigger spike")
+
+    // 6. Dismiss alert
+    engine.dismissSpikeAlert()
+    assert(engine.activeSpikeAlert == nil, "Dismiss should clear active alert")
+
+    print("  ✅ Spikeguard surge velocity, wake-from-sleep delta & cooldown checks passed")
+}
+
 // MARK: - Main Test Runner
 @main
 struct PeekCheckRunner {
@@ -620,12 +660,13 @@ struct PeekCheckRunner {
             testModelCleanNames()
             testSpendEngineThresholds()
             testConnectionHealthStates()
+            testSpikeguardDetection()
             try testKeyResolverCommandAndConfig()
             try testRealtimeAnalyticsProcessingAndMerging()
             try testRealtimeSnapshotAndDateFormatAlignment()
             testLaunchAtLoginManager()
             try testModelPricingDecodingAndTooltip()
-            print("\n🎉 ALL CHECKS PASSED (10/10 suites)")
+            print("\n🎉 ALL CHECKS PASSED (11/11 suites)")
         } catch {
             print("❌ Check failed with error: \(error)")
             exit(1)

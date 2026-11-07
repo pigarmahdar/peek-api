@@ -33,6 +33,9 @@ public struct SpendMenuView: View {
             if !engine.isKeyConfigured || engine.isEditingKey || engine.connectionState == .unauthorized {
                 settingsSection
             } else {
+                if let alert = engine.activeSpikeAlert {
+                    spikeAlertCard(alert: alert)
+                }
                 burnHeaderSection
                 modelsSection
                 walletSection
@@ -54,6 +57,35 @@ public struct SpendMenuView: View {
     }
 
     // MARK: - Sections
+
+    @ViewBuilder
+    private func spikeAlertCard(alert: SpikeAlert) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.red)
+                .font(.callout)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(alert.isOvernight ? "Overnight Surge (+\(String(format: "$%.2f", alert.delta)))" : "Rapid Spend Spike (+\(String(format: "$%.2f", alert.delta)))")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.red)
+                Text("Top: \(alert.topModel) · check your harness")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            Button(action: {
+                engine.dismissSpikeAlert()
+            }) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(8)
+        .background(Color.red.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
 
     @ViewBuilder
     private var burnHeaderSection: some View {
